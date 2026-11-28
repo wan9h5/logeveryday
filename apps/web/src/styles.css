@@ -230,6 +230,21 @@
   margin-top: 5px;
 }
 .daily-mood { display: flex; align-items: center; gap: 8px; }
+.daily-game-fields { display: grid; gap: 8px; }
+.daily-game-fields > label { display: grid; gap: 4px; }
+.daily-game-choice { display: flex; gap: 8px; min-inline-size: 0; padding: 0; margin: 0; border: 0; }
+.daily-game-choice legend { padding: 0; margin-block-end: 3px; }
+.daily-game-choice label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.daily-game-choice label:has(input:focus-visible) { border-color: var(--accent); }
+.daily-record .daily-game-choice input { width: auto; margin: 0; padding: 0; accent-color: var(--accent-hover); }
 .daily-mood-dot { display: inline-block; flex: none; width: 9px; height: 9px; margin-inline-end: 5px; border-radius: 50%; }
 .daily-record-total {
   display: flex;

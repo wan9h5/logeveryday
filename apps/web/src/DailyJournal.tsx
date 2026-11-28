@@ -28,10 +28,12 @@ const recordDateFormat = new Intl.DateTimeFormat('sv-SE', {
 
 type MealName = (typeof meals)[number][0]
 type Expense = { description: string; amount: number | null }
+type GamingEntry = { played: false } | { played: true; name: string; teamedUp: boolean | null; teammates?: string }
 type DailyRecord = {
   date: string
   bristolType: number | null
   moodScore: number | null
+  gaming?: GamingEntry
 }
 
 export type DailyEntry = DailyRecord & {
@@ -150,6 +152,15 @@ export function entryRows(entry: SavedDailyEntry): { label: string; value: strin
   if (entry.moodScore && scores.includes(entry.moodScore)) {
     const [label, color] = moodOptions[entry.moodScore - 1]
     rows.push({ label: '整体心情', value: `${entry.moodScore} / 5 · ${label}`, color })
+  }
+  const gaming = entry.gaming
+  if (gaming?.played === false) rows.push({ label: '游戏', value: '没玩' })
+  if (gaming?.played === true) {
+    if (typeof gaming.name === 'string') rows.push({ label: '游戏', value: gaming.name })
+    if (typeof gaming.teamedUp === 'boolean') rows.push({ label: '开黑', value: gaming.teamedUp ? '是' : '否' })
+    if (gaming.teamedUp && typeof gaming.teammates === 'string' && gaming.teammates) {
+      rows.push({ label: '开黑对象', value: gaming.teammates })
+    }
   }
   return rows
 }
@@ -384,7 +395,28 @@ function editDefaults(entry: SavedDailyEntry | undefined) {
     legacySleepScore: entry.sleepScore ?? undefined,
     moodScore: entry.moodScore,
     bristolType: entry.bristolType,
+    gaming: entry.gaming,
   } satisfies DailyEntry
+}
+
+function GameChoice({ name, question, labels, value, onChange }: {
+  name: string
+  question: string
+  labels: [string, string]
+  value: boolean | null
+  onChange: (choice: boolean) => void
+}) {
+  return (
+    <fieldset className="daily-game-choice">
+      <legend>{question}</legend>
+      {[true, false].map((choice, index) => (
+        <label key={labels[index]}>
+          <input type="radio" name={name} checked={value === choice} onChange={() => onChange(choice)} />
+          {labels[index]}
+        </label>
+      ))}
+    </fieldset>
+  )
 }
 
 export function DailyJournalForm({ onSave, onClose, mealSuggestions, initialEntry }: {
@@ -397,6 +429,15 @@ export function DailyJournalForm({ onSave, onClose, mealSuggestions, initialEntr
   const [initial] = useState(() => editDefaults(initialEntry))
   const [date] = useState(() => initial?.date ?? recordDateFormat.format(new Date()))
   const [mood, setMood] = useState(initial?.moodScore?.toString() ?? '')
+  const [gaming, setGaming] = useState(() => {
+    const saved = initial?.gaming
+    return {
+      played: saved?.played ?? null,
+      name: saved?.played && typeof saved.name === 'string' ? saved.name : '',
+      teamedUp: saved?.played && typeof saved.teamedUp === 'boolean' ? saved.teamedUp : null,
+      teammates: saved?.played && typeof saved.teammates === 'string' ? saved.teammates : '',
+    }
+  })
   const [error, setError] = useState('')
   const [mealAmounts, setMealAmounts] = useState<Partial<Record<MealName, string>>>(() => Object.fromEntries(
     (initial?.meals ?? []).map(({ name, amount }) => [name, amount?.toString() ?? '']),
@@ -422,6 +463,11 @@ export function DailyJournalForm({ onSave, onClose, mealSuggestions, initialEntr
     const data = new FormData(event.currentTarget)
     const text = (name: string) => String(data.get(name) ?? '').trim()
     const number = (name: string) => numberOrNull(data.get(name))
+    const gameName = gaming.name.trim()
+    if (gaming.played && !gameName) {
+      setError('请填写游戏名。')
+      return
+    }
     const entry: DailyEntry = {
       date: text('date'),
       meals: meals.map(([name]) => ({
@@ -431,6 +477,12 @@ export function DailyJournalForm({ onSave, onClose, mealSuggestions, initialEntr
         description: text(`otherDescription-${id}`), amount: number(`otherAmount-${id}`),
       })).filter(({ description, amount }) => description || amount !== null),
       bristolType: number('bristolType'), sleepQuality: number('sleepQuality'), moodScore: number('moodScore'),
+    }
+    if (gaming.played === false) entry.gaming = { played: false }
+    if (gaming.played) {
+      const teammates = gaming.teamedUp ? gaming.teammates.trim() : ''
+      entry.gaming = { played: true, name: gameName, teamedUp: gaming.teamedUp }
+      if (teammates) entry.gaming.teammates = teammates
     }
     if (entry.sleepQuality === null && initial?.legacySleepScore) entry.legacySleepScore = initial.legacySleepScore
     if (!entryRows(entry).length) {
@@ -538,6 +590,39 @@ export function DailyJournalForm({ onSave, onClose, mealSuggestions, initialEntr
               </JournalSelect>
               {mood && <span className="daily-mood-dot" style={{ background: moodOptions[Number(mood) - 1][1] }} aria-hidden="true" />}
             </div></td>
+          </tr>
+          <tr>
+            <th scope="row">游戏</th>
+            <td>
+              <div className="daily-game-fields">
+                <GameChoice name={fieldId('playedGame')} question="有没有玩游戏" labels={['有', '没有']}
+                  value={gaming.played} onChange={(played) => setGaming((previous) => ({ ...previous, played }))} />
+                {gaming.played && (
+                  <>
+                    <label>
+                      游戏名
+                      <input type="text" placeholder="输入游戏名" required maxLength={255}
+                        value={gaming.name} onChange={(event) => {
+                          const name = event.target.value
+                          setGaming((previous) => ({ ...previous, name }))
+                        }} />
+                    </label>
+                    <GameChoice name={fieldId('teamedUp')} question="是否开黑" labels={['是', '否']}
+                      value={gaming.teamedUp} onChange={(teamedUp) => setGaming((previous) => ({ ...previous, teamedUp }))} />
+                    {gaming.teamedUp && (
+                      <label>
+                        开黑对象
+                        <input type="text" placeholder="输入开黑对象" maxLength={255}
+                          value={gaming.teammates} onChange={(event) => {
+                            const teammates = event.target.value
+                            setGaming((previous) => ({ ...previous, teammates }))
+                          }} />
+                      </label>
+                    )}
+                  </>
+                )}
+              </div>
+            </td>
           </tr>
         </tbody>
       </table>

@@ -436,7 +436,7 @@ function App() {
           <div className="sidebar-scroll">
             <div className="sidebar-head">
               <div className="eyebrow">WORKSPACE</div>
-              <div className="workspace-title">我的生活 <ChevronDown size={14} /></div>
+              <div className="workspace-title">我的人生这本书 <ChevronDown size={14} /></div>
             </div>
             <div className="sidebar-nav">
               <button className={`nav-item ${view === 'inbox' ? 'active' : ''}`} onClick={() => openView('inbox')}>
