@@ -9,14 +9,13 @@ import Highlight from '@tiptap/extension-highlight'
 import TextStyle from '@tiptap/extension-text-style'
 import Link from '@tiptap/extension-link'
 import Placeholder from '@tiptap/extension-placeholder'
-import { ArrowDownToLine, CalendarDays, Check, ChevronDown, Inbox, LayoutGrid, Plus, Settings, Sparkles, Type, Upload, X } from 'lucide-react'
+import { ArrowDownToLine, CalendarDays, Check, ChevronDown, Inbox, LayoutGrid, Plus, Settings, Type, Upload, X } from 'lucide-react'
 import type { ApiDocument } from './api'
 import { DocumentColumns } from './DocumentColumns'
 import { JournalDialog } from './JournalDialog'
 import { JournalBackup } from './JournalBackup'
 import { InsightsView, WeeklySummary } from './InsightsView'
 import { CalendarView, type CalendarAnchor } from './CalendarView'
-import { SavePositionPicker, type SavePosition } from './SavePositionPicker'
 import { FloatingTextToolbar } from './FloatingTextToolbar'
 import { ColumnTheme, JournalFontSize, columnThemeStyle } from './editorStyle'
 import { ParagraphTime, journalTimeNextLine } from './ParagraphTime'
@@ -25,28 +24,18 @@ import { DailyJournal, DailyJournalForm, closeDailySlot, collectMealSuggestions,
 import { HeadingPrefix, editableJournal, headingText, headingTextPosition } from './HeadingPrefix'
 import { useJournalDocuments, type SaveState } from './useJournalDocuments'
 
-type PluginId = 'daily' | 'mood' | 'bristol' | 'expense' | 'image'
 type View = 'inbox' | 'calendar' | 'insights'
-type DailyField = 'breakfastFood' | 'moodScore' | 'bristolType' | 'otherDescription-0'
 
 const journalEditorProps = {
   scrollThreshold: { top: 0, right: 0, bottom: 72, left: 0 },
   scrollMargin: { top: 5, right: 5, bottom: 96, left: 5 },
 }
 
-function focusDailyForm(host: HTMLDivElement, field: DailyField) {
+function focusDailyForm(host: HTMLDivElement) {
   host.scrollIntoView({ block: 'start', inline: 'nearest' })
-  const input = host.querySelector<HTMLElement>(`[name="${field}"]`)
+  const input = host.querySelector<HTMLInputElement>('input[name="breakfastFood"]')
   input?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
   input?.focus({ preventScroll: true })
-}
-
-const pluginMeta: Record<PluginId, { icon: string; label: string; description: string }> = {
-  daily: { icon: '📅', label: '今日记录', description: '插入今天的日期标题' },
-  mood: { icon: '😊', label: '心情', description: '记录今天的心情分数' },
-  bristol: { icon: '💩', label: '排便', description: '选择 Bristol 类型' },
-  expense: { icon: '💰', label: '消费', description: '记录一笔消费' },
-  image: { icon: '🖼️', label: '图片', description: '上传一张图片' },
 }
 
 function positionAtPath(node: ProseMirrorNode, path: number[]) {
@@ -69,18 +58,13 @@ function JournalEditor({ doc, documents, getDraft, saveState, onEdit, onSave, en
   onSave: () => void
   entryAnchor: CalendarAnchor | null
 }) {
-  const [moduleMenu, setModuleMenu] = useState(false)
-  const modulePickerRef = useRef<HTMLDivElement>(null)
-  const [showComposer, setShowComposer] = useState(false)
-  const [composerText, setComposerText] = useState('')
-  const [composerPosition, setComposerPosition] = useState<SavePosition>('bottom')
   const paneRef = useRef<HTMLElement>(null)
   const bottomAnchorRef = useRef<HTMLDivElement>(null)
   const [showJumpToBottom, setShowJumpToBottom] = useState(false)
   const [dailyMode, setDailyMode] = useState(false)
   const [dailyForms, setDailyForms] = useState<HTMLDivElement[]>([])
   const dailyFormId = useRef(0)
-  const pendingFormFocus = useRef<{ host: HTMLDivElement; field: DailyField } | null>(null)
+  const pendingFormFocus = useRef<HTMLDivElement | null>(null)
   const [dailyPrompt, setDailyPrompt] = useState<{ position: number; host: HTMLDivElement } | null>(null)
   const [dailyEdit, setDailyEdit] = useState<DailyRecordTarget | null>(null)
   const [dailyDelete, setDailyDelete] = useState<DailyRecordTarget | null>(null)
@@ -172,17 +156,17 @@ function JournalEditor({ doc, documents, getDraft, saveState, onEdit, onSave, en
   }, [editor, entryAnchor])
 
   useLayoutEffect(() => {
-    const focus = pendingFormFocus.current
-    if (!focus) return
+    const host = pendingFormFocus.current
+    if (!host) return
     pendingFormFocus.current = null
-    focusDailyForm(focus.host, focus.field)
+    focusDailyForm(host)
   }, [dailyForms])
 
   useLayoutEffect(() => {
     if (editor && dailyPrompt) showDailyPrompt(editor, dailyPrompt)
   }, [editor, dailyPrompt])
 
-  const showDailyForm = (field: DailyField = 'breakfastFood') => {
+  const showDailyForm = () => {
     if (!editor) return
     const newHost = document.createElement('div')
     newHost.className = 'daily-record-slot'
@@ -192,10 +176,10 @@ function JournalEditor({ doc, documents, getDraft, saveState, onEdit, onSave, en
     const otherDocuments = documents.filter((item) => item.id !== doc.id).map((item) => item.content_json)
     setMealSuggestions(collectMealSuggestions([editor.getJSON(), ...otherDocuments]))
     if (host === newHost) {
-      pendingFormFocus.current = { host, field }
+      pendingFormFocus.current = host
       setDailyForms((forms) => [...forms, host])
     } else {
-      focusDailyForm(host, field)
+      focusDailyForm(host)
     }
   }
 
@@ -223,28 +207,6 @@ function JournalEditor({ doc, documents, getDraft, saveState, onEdit, onSave, en
     return true
   }
 
-  useEffect(() => {
-    if (!moduleMenu) return
-
-    const closeOutside = (event: PointerEvent) => {
-      const picker = modulePickerRef.current
-      if (!picker || !event.composedPath().includes(picker)) setModuleMenu(false)
-    }
-
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return
-      modulePickerRef.current?.querySelector<HTMLButtonElement>('[aria-expanded="true"]')?.focus()
-      setModuleMenu(false)
-    }
-
-    document.addEventListener('pointerdown', closeOutside, true)
-    document.addEventListener('keydown', closeOnEscape)
-    return () => {
-      document.removeEventListener('pointerdown', closeOutside, true)
-      document.removeEventListener('keydown', closeOnEscape)
-    }
-  }, [moduleMenu])
-
   const headings = useMemo(() => {
     if (!editor) return []
     const result: { level: number; text: string; position: number }[] = []
@@ -255,46 +217,6 @@ function JournalEditor({ doc, documents, getDraft, saveState, onEdit, onSave, en
     })
     return result
   }, [editor?.state.doc])
-
-  const insertModuleContent = (content: string | JSONContent) => {
-    editor?.chain().focus().insertContent(content).run()
-  }
-
-  const addRecord = (id: PluginId) => {
-    setModuleMenu(false)
-    if (id === 'daily') {
-      const today = new Date()
-      const title = today.toLocaleDateString('zh-CN', {
-        year: 'numeric', month: 'long', day: 'numeric', weekday: 'short',
-      })
-      insertModuleContent({ type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: title }] })
-      return
-    }
-    if (id === 'image') {
-      insertModuleContent('<p>🖼️ 图片占位 · 点击上传图片</p>')
-      return
-    }
-
-    const fields = { mood: 'moodScore', bristol: 'bristolType', expense: 'otherDescription-0' } as const
-    setDailyMode(true)
-    showDailyForm(fields[id])
-  }
-
-  const saveComposer = () => {
-    const text = composerText.trim()
-    if (!text || !editor) return false
-    const position = composerPosition === 'top' ? 0 : editor.state.doc.content.size
-    const inserted = editor.commands.insertContentAt(position, {
-      type: 'heading',
-      attrs: { level: 1 },
-      content: [{ type: 'text', text }],
-    })
-    if (inserted) {
-      setComposerText('')
-      onSave()
-    }
-    return inserted
-  }
 
   return (
     <>
@@ -307,35 +229,6 @@ function JournalEditor({ doc, documents, getDraft, saveState, onEdit, onSave, en
             </div>
           </div>
           <div className="editor-toolbar">
-            <button className="toolbar-button new-entry-button" onClick={() => { setShowComposer(true); setComposerPosition('bottom') }}>
-              <Plus size={17} />新增
-            </button>
-            <div className="toolbar-group module-picker" ref={modulePickerRef}>
-              <button
-                className="toolbar-button module-trigger"
-                aria-expanded={moduleMenu}
-                aria-controls="module-picker"
-                onClick={() => setModuleMenu((open) => !open)}
-              >
-                <Sparkles size={15} />模块<ChevronDown size={13} />
-              </button>
-              <div className={`insert-menu${moduleMenu ? ' is-open' : ''}`} id="module-picker" aria-hidden={!moduleMenu}>
-                {(Object.keys(pluginMeta) as PluginId[]).map((id) => (
-                  <button
-                    key={id}
-                    tabIndex={moduleMenu ? 0 : -1}
-                    onClick={() => addRecord(id)}
-                  >
-                    <span>{pluginMeta[id].icon}</span>
-                    <span>
-                      <strong>{pluginMeta[id].label}</strong>
-                      <small>{pluginMeta[id].description}</small>
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="toolbar-divider" />
             <div className="toolbar-group format-group">
               <button
                 aria-label="加粗"
@@ -434,7 +327,7 @@ function JournalEditor({ doc, documents, getDraft, saveState, onEdit, onSave, en
       </div>
       {dailyPrompt && createPortal(
         <>
-          <button type="button" className="toolbar-button" onClick={() => showDailyForm()}>
+          <button type="button" className="toolbar-button" onClick={showDailyForm}>
             <Plus size={15} aria-hidden="true" />填写日志
           </button>
           <button type="button" className="small-icon" aria-label="关闭填写日志提示" title="关闭填写日志提示" onClick={() => hideDailySlot(dailyPrompt.host)}>
@@ -499,44 +392,6 @@ function JournalEditor({ doc, documents, getDraft, saveState, onEdit, onSave, en
       <aside className="summary-pane">
         <WeeklySummary documents={documents} />
       </aside>
-      {showComposer && (
-        <JournalDialog
-          className="composer-dialog"
-          labelledBy="composer-dialog-title"
-          closeOnBackdrop
-          onClose={() => setShowComposer(false)}
-        >
-          {(close) => (
-            <form onSubmit={(event) => { event.preventDefault(); if (saveComposer()) close() }}>
-              <div className="composer-head">
-                <h3 id="composer-dialog-title"><Sparkles size={17} />新增日志</h3>
-                <button className="icon-button" type="button" aria-label="关闭" onClick={close}><X size={18} /></button>
-              </div>
-              <textarea
-                autoFocus
-                aria-label="日志内容"
-                aria-describedby="composer-keyboard-hint"
-                value={composerText}
-                placeholder="写下今天想记录的内容…"
-                onChange={(event) => setComposerText(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
-                    event.preventDefault()
-                    event.currentTarget.form?.requestSubmit()
-                  }
-                }}
-              />
-              <div className="composer-actions">
-                <span id="composer-keyboard-hint">Enter 保存 · Shift + Enter 换行</span>
-                <div>
-                  <SavePositionPicker value={composerPosition} onChange={setComposerPosition} />
-                  <button className="composer-save" type="submit" disabled={!composerText.trim() || !editor}>保存</button>
-                </div>
-              </div>
-            </form>
-          )}
-        </JournalDialog>
-      )}
     </>
   )
 }
@@ -624,7 +479,7 @@ function App() {
           />
         ) : (
           <>
-            <main className="editor-pane">
+            <main className={view === 'insights' ? 'editor-pane insights-pane' : 'editor-pane'}>
               {view === 'calendar' && (
                 <CalendarView documents={journal.documents} onOpen={openDocument} status={journal.loadState}
                   selection={calendarSelection} onSelect={setCalendarSelection} />
@@ -638,7 +493,7 @@ function App() {
                 </div>
               )}
             </main>
-            <aside className="summary-pane" aria-hidden="true" />
+            {view !== 'insights' && <aside className="summary-pane" aria-hidden="true" />}
           </>
         )}
       </div>

@@ -1,6 +1,10 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react'
 import { ChevronLeft, ChevronRight, Sparkles } from 'lucide-react'
 import { api, type ApiDocument, type InsightsCount, type InsightsPeriod, type JournalInsights } from './api'
+import type { TrendMetric } from './InsightCharts'
+
+const TrendChart = lazy(() => import('./InsightCharts').then(({ TrendChart }) => ({ default: TrendChart })))
+const BristolChart = lazy(() => import('./InsightCharts').then(({ BristolChart }) => ({ default: BristolChart })))
 
 const periods: [InsightsPeriod, string][] = [
   ['day', '日'], ['week', '周'], ['month', '月'], ['quarter', '季度'], ['year', '年'],
@@ -104,7 +108,11 @@ function CountList({ title, entries }: { title: string; entries: InsightsCount[]
   )
 }
 
-function InsightsReport({ data }: { data: JournalInsights }) {
+function InsightsReport({ data, metric, onMetricChange }: {
+  data: JournalInsights
+  metric: TrendMetric
+  onMetricChange: (metric: TrendMetric) => void
+}) {
   return (
     <div className="insights-results">
       <div className="insight-cards journal-insight-cards">
@@ -115,6 +123,9 @@ function InsightsReport({ data }: { data: JournalInsights }) {
       </div>
       {data.recorded_days === 0 ? <p className="insights-notice" role="status">这个时段还没有记录。</p> : (
         <>
+          <Suspense fallback={<p className="insights-notice" role="status">正在加载趋势图…</p>}>
+            <TrendChart data={data} metric={metric} onMetricChange={onMetricChange} />
+          </Suspense>
           <div className="insights-panel-row">
             <Panel title="消费分类">
               {data.expenses.categories.length ? (
@@ -151,7 +162,9 @@ function InsightsReport({ data }: { data: JournalInsights }) {
               {data.bristol.count ? (
                 <>
                   <p className="insights-muted">共记录 {data.bristol.count} 次</p>
-                  <Bars rows={data.bristol.distribution.map(({ value, count }) => ({ label: `Type ${value}`, value: count }))} format={(value) => `${value} 次`} />
+                  <Suspense fallback={<p className="insights-muted" role="status">正在加载分类图…</p>}>
+                    <BristolChart distribution={data.bristol.distribution} />
+                  </Suspense>
                 </>
               ) : <p className="insights-muted">暂无排便记录</p>}
             </Panel>
@@ -188,6 +201,7 @@ function InsightsReport({ data }: { data: JournalInsights }) {
 export function InsightsView({ documents }: { documents: ApiDocument[] }) {
   const [period, setPeriod] = useState<InsightsPeriod>('month')
   const [anchor, setAnchor] = useState<string | null>(null)
+  const [metric, setMetric] = useState<TrendMetric>('expense_total')
   const { data, error, retry } = useInsights(period, anchor, documents)
   const today = journalCalendar.format(new Date())
   const canMoveForward = Boolean(data && data.end_date < today)
@@ -214,7 +228,7 @@ export function InsightsView({ documents }: { documents: ApiDocument[] }) {
           </div>
           {anchor && <button className="toolbar-button" type="button" onClick={() => setAnchor(null)}>回到本期</button>}
         </div>
-        {data ? <InsightsReport data={data} /> : error ? (
+        {data ? <InsightsReport data={data} metric={metric} onMetricChange={setMetric} /> : error ? (
           <div className="insights-notice" role="alert">统计暂时无法加载。<button type="button" className="toolbar-button" onClick={retry}>重试</button></div>
         ) : <p className="insights-notice" role="status">正在加载统计…</p>}
       </div>

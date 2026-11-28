@@ -41,7 +41,7 @@ async def lifespan(_app: FastAPI):
                 await task
 
 
-app = FastAPI(title=settings.app_name, version="1.0.0", lifespan=lifespan)
+app = FastAPI(title=settings.app_name, version="1.1.0", lifespan=lifespan)
 app.include_router(backup_router)
 app.add_middleware(
     CORSMiddleware,
