@@ -6,8 +6,8 @@ import { FONT_SIZES } from './editorStyle'
 type Panel = 'size' | 'foreground' | 'background'
 
 const textColors = [
-  ['墨黑', '#243243'], ['灰蓝', '#526b82'], ['雾蓝', '#3b74a5'], ['海青', '#347e83'],
-  ['松绿', '#377047'], ['陶棕', '#975730'], ['莓红', '#a43755'],
+  ['墨黑', '#111111'], ['松绿', '#377047'], ['灰蓝', '#526b82'], ['海青', '#347e83'],
+  ['深绿', '#06643a'], ['陶棕', '#975730'], ['莓红', '#a43755'],
 ]
 const highlightColors = [
   ['浅蓝', '#d9e9f5'], ['浅青', '#d4efec'], ['浅绿', '#dcecd5'], ['浅黄', '#fff0c6'],
@@ -109,7 +109,7 @@ export function FloatingTextToolbar({ editor }: { editor: Editor }) {
             aria-expanded={panel === 'foreground'}
             aria-controls={panel === 'foreground' ? panelId : undefined}
             data-tooltip="文字颜色"
-            style={{ textDecorationColor: style.color ?? '#3b74a5' }}
+            style={{ textDecorationColor: style.color ?? 'var(--accent)' }}
             onMouseDown={keepSelection}
             onClick={() => togglePanel('foreground')}
           >A</button>
@@ -159,7 +159,7 @@ export function FloatingTextToolbar({ editor }: { editor: Editor }) {
             >
               <input
                 aria-label="十六进制色号"
-                placeholder={isBackground ? '#FFF0C6' : '#3B74A5'}
+                placeholder={isBackground ? '#FFF0C6' : '#06643A'}
                 value={hex}
                 maxLength={7}
                 spellCheck={false}

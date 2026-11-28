@@ -2,7 +2,7 @@ import type { CSSProperties } from 'react'
 import { Extension, type JSONContent } from '@tiptap/react'
 
 export const COLUMN_THEMES = [
-  { name: '雾蓝', color: '#3b74a5' },
+  { name: '羊皮纸', color: '#b28b55' },
   { name: '灰蓝', color: '#567189' },
   { name: '海青', color: '#347e83' },
   { name: '松绿', color: '#4d775c' },

@@ -9,7 +9,6 @@ type ColumnAction = { kind: 'create' } | { kind: 'rename' | 'delete'; doc: ApiDo
 type Props = {
   documents: ApiDocument[]
   activeId?: string
-  search: string
   loadState: 'loading' | 'ready' | 'error'
   retryLoad: () => void
   onOpen: (id: string) => void
@@ -113,18 +112,15 @@ function ColumnDialog({ action, onClose, onConfirm }: {
 }
 
 export function DocumentColumns({
-  documents, activeId, search, loadState, retryLoad, onOpen, onCreate, onRename, onDelete,
+  documents, activeId, loadState, retryLoad, onOpen, onCreate, onRename, onDelete,
 }: Props) {
   const [menuId, setMenuId] = useState<string | null>(null)
   const [action, setAction] = useState<ColumnAction | null>(null)
   const openMenuRef = useRef<HTMLDivElement>(null)
-  const query = search.trim().toLocaleLowerCase()
-  const visible = documents.filter((doc) =>
-    doc.title.toLocaleLowerCase().includes(query) || doc.search_text.toLocaleLowerCase().includes(query),
-  )
 
   useEffect(() => {
     if (!menuId) return
+    openMenuRef.current?.querySelector('.column-menu')?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
     const outside = (event: PointerEvent) => {
       const menu = openMenuRef.current
       if (menu && !event.composedPath().includes(menu)) setMenuId(null)
@@ -177,10 +173,10 @@ export function DocumentColumns({
       )}
       {loadState === 'ready' && (
         <div className="doc-list">
-          {visible.length === 0 && (
-            <p className="column-empty">{query ? '找不到匹配的栏目' : '点击 + 新建第一个栏目'}</p>
+          {documents.length === 0 && (
+            <p className="column-empty">点击 + 新建第一个栏目</p>
           )}
-          {visible.map((doc) => {
+          {documents.map((doc) => {
             const selected = activeId === doc.id
             const open = menuId === doc.id
             return (
@@ -196,7 +192,6 @@ export function DocumentColumns({
                     <strong>{doc.title}</strong>
                     <small>{dateFormat.format(new Date(doc.updated_at))}</small>
                   </span>
-                  {selected && <span className="selected-bar" />}
                 </button>
                 <div className="column-tools" ref={open ? openMenuRef : undefined}>
                   <button

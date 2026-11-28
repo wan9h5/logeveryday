@@ -1,17 +1,21 @@
 import { useEffect, useRef, useState } from 'react'
+import type { Node as ProseMirrorNode } from '@tiptap/pm/model'
 import { api, type ApiDocument } from './api'
+import { journalSnapshot } from './HeadingPrefix'
 
-type DocumentContent = Pick<ApiDocument, 'content_json' | 'search_text'>
+const AUTOSAVE_DELAY = 5000
 type LoadState = 'loading' | 'ready' | 'error'
-export type SaveState = 'saved' | 'saving' | 'error'
+export type SaveState = 'saved' | 'pending' | 'saving' | 'error'
 
 export function useJournalDocuments() {
   const [documents, setDocuments] = useState<ApiDocument[]>([])
   const [loadState, setLoadState] = useState<LoadState>('loading')
   const [loadAttempt, setLoadAttempt] = useState(0)
   const [saveStates, setSaveStates] = useState<Record<string, SaveState>>({})
-  const drafts = useRef(new Map<string, DocumentContent>())
+  const drafts = useRef(new Map<string, ProseMirrorNode>())
+  const timers = useRef(new Map<string, number>())
   const writes = useRef(new Map<string, Promise<void>>())
+  const deleting = useRef(new Set<string>())
 
   useEffect(() => {
     let cancelled = false
@@ -26,13 +30,18 @@ export function useJournalDocuments() {
   }, [loadAttempt])
 
   useEffect(() => {
+    const scheduledSaves = timers.current
     const warnIfUnsaved = (event: BeforeUnloadEvent) => {
       if (drafts.current.size === 0) return
       event.preventDefault()
       event.returnValue = true
     }
     window.addEventListener('beforeunload', warnIfUnsaved)
-    return () => window.removeEventListener('beforeunload', warnIfUnsaved)
+    return () => {
+      window.removeEventListener('beforeunload', warnIfUnsaved)
+      scheduledSaves.forEach((timer) => window.clearTimeout(timer))
+      scheduledSaves.clear()
+    }
   }, [])
 
   const retryLoad = () => {
@@ -45,34 +54,54 @@ export function useJournalDocuments() {
   }
 
   const setSaveState = (id: string, state: SaveState) => {
-    setSaveStates((states) => ({ ...states, [id]: state }))
+    setSaveStates((states) => states[id] === state ? states : { ...states, [id]: state })
   }
 
-  async function writeDrafts(id: string) {
+  function cancelScheduledSave(id: string) {
+    const timer = timers.current.get(id)
+    if (timer === undefined) return
+    window.clearTimeout(timer)
+    timers.current.delete(id)
+  }
+
+  async function writeDraft(id: string, draft: ProseMirrorNode) {
     setSaveState(id, 'saving')
     try {
-      // Finish older requests first. While one runs, keep only the latest snapshot.
-      for (let draft = drafts.current.get(id); draft; draft = drafts.current.get(id)) {
-        const result = await api.saveDocument(id, draft.content_json, draft.search_text)
-        if (drafts.current.get(id) === draft) drafts.current.delete(id)
-        updateDocument(id, { updated_at: result.updated_at })
+      const snapshot = journalSnapshot(draft)
+      const result = await api.saveDocument(id, snapshot.content_json, snapshot.search_text)
+      updateDocument(id, { ...snapshot, updated_at: result.updated_at })
+      if (drafts.current.get(id) === draft) {
+        drafts.current.delete(id)
+        setSaveState(id, 'saved')
       }
-      setSaveState(id, 'saved')
     } catch {
-      setSaveState(id, 'error')
+      if (drafts.current.get(id) === draft) setSaveState(id, 'error')
     }
   }
 
   function save(id: string) {
-    if (writes.current.has(id) || !drafts.current.has(id)) return
-    writes.current.set(id, writeDrafts(id).finally(() => { writes.current.delete(id) }))
+    cancelScheduledSave(id)
+    const draft = drafts.current.get(id)
+    if (!draft || writes.current.has(id) || deleting.current.has(id)) return
+
+    writes.current.set(id, writeDraft(id, draft).finally(() => {
+      writes.current.delete(id)
+      // A newer draft may already be due if its timer elapsed during this request.
+      const latest = drafts.current.get(id)
+      if (latest && latest !== draft && !timers.current.has(id)) save(id)
+    }))
   }
 
-  const edit = (id: string, content: DocumentContent) => {
-    drafts.current.set(id, content)
-    updateDocument(id, content)
-    save(id)
+  const edit = (id: string, doc: ProseMirrorNode) => {
+    drafts.current.set(id, doc)
+    setSaveState(id, 'pending')
+    cancelScheduledSave(id)
+    if (!deleting.current.has(id)) {
+      timers.current.set(id, window.setTimeout(() => save(id), AUTOSAVE_DELAY))
+    }
   }
+
+  const getDraft = (id: string) => drafts.current.get(id)
 
   const create = async (title: string, themeColor: string) => {
     const created = await api.createDocument(title, themeColor)
@@ -86,12 +115,19 @@ export function useJournalDocuments() {
   }
 
   const remove = async (id: string) => {
-    await writes.current.get(id)
-    await api.deleteDocument(id)
-    drafts.current.delete(id)
-    setDocuments((items) => items.filter((item) => item.id !== id))
-    setSaveStates(({ [id]: _deleted, ...states }) => states)
+    deleting.current.add(id)
+    cancelScheduledSave(id)
+    try {
+      await writes.current.get(id)
+      await api.deleteDocument(id)
+      drafts.current.delete(id)
+      setDocuments((items) => items.filter((item) => item.id !== id))
+      setSaveStates(({ [id]: _deleted, ...states }) => states)
+    } finally {
+      deleting.current.delete(id)
+      if (drafts.current.has(id)) save(id)
+    }
   }
 
-  return { documents, loadState, retryLoad, saveStates, edit, save, create, rename, remove }
+  return { documents, loadState, retryLoad, saveStates, edit, getDraft, save, create, rename, remove }
 }

@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from fastapi import Depends, FastAPI, HTTPException, Query
@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .db import Base, engine, get_db
+from .insights import JOURNAL_ZONE, JournalStats, Period, as_utc_boundary, local_day, period_bounds
 from .models import BristolRecord, Document, Expense, Mood, Record, User
 from .schemas import BristolCreate, DocumentCreate, DocumentOut, DocumentUpdate, ExpenseCreate, MoodCreate, RecordCreate, RecordOut
 
@@ -167,3 +168,41 @@ def expense_insights(period: str = Query(default="month"), db: Session = Depends
     total = db.scalar(select(func.coalesce(func.sum(Expense.amount), 0)).where(Expense.user_id == "demo-user", Expense.expense_time >= start)) or Decimal("0")
     rows = db.execute(select(Expense.category, func.sum(Expense.amount)).where(Expense.user_id == "demo-user", Expense.expense_time >= start).group_by(Expense.category)).all()
     return {"period": period, "total": total, "currency": "CNY", "by_category": [{"category": category, "total": amount} for category, amount in rows]}
+
+
+@app.get("/api/insights/journal")
+def journal_insights(
+    period: Period = "month",
+    anchor: date | None = None,
+    db: Session = Depends(get_db),
+):
+    try:
+        start, end = period_bounds(period, anchor or datetime.now(JOURNAL_ZONE).date())
+        start_utc, end_utc = as_utc_boundary(start), as_utc_boundary(end)
+    except (OverflowError, ValueError):
+        raise HTTPException(status_code=422, detail="Date is outside the supported range") from None
+    stats = JournalStats(period, start, end)
+    user_id = "demo-user"
+    documents = select(Document.content_json).where(Document.user_id == user_id)
+    for content in db.scalars(documents.execution_options(yield_per=32)):
+        stats.add_document(content)
+
+    expenses = select(Expense.amount, Expense.category, Expense.description, Expense.expense_time).where(
+        Expense.user_id == user_id, Expense.expense_time >= start_utc, Expense.expense_time < end_utc,
+    )
+    for amount, category, description, stamp in db.execute(expenses):
+        stats.add_expense(local_day(stamp), amount, category, description)
+
+    moods = select(Mood.score, Mood.recorded_at).where(
+        Mood.user_id == user_id, Mood.recorded_at >= start_utc, Mood.recorded_at < end_utc,
+    )
+    for score, stamp in db.execute(moods):
+        stats.add_mood(local_day(stamp), score)
+
+    bristol = select(BristolRecord.bristol_type, BristolRecord.recorded_at).where(
+        BristolRecord.user_id == user_id, BristolRecord.recorded_at >= start_utc, BristolRecord.recorded_at < end_utc,
+    )
+    for bristol_type, stamp in db.execute(bristol):
+        stats.add_bristol(local_day(stamp), bristol_type)
+
+    return stats.summary()
