@@ -4,6 +4,7 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api
 
 export type ApiDocument = { id: string; title: string; content_json: JSONContent; search_text: string; created_at: string; updated_at: string }
 export type ApiRecord = { id: string; record_type: string; recorded_at: string; payload: Record<string, unknown> }
+export type AutomaticBackupStatus = { enabled: boolean; directory: string; last_success_at: string | null; failed: boolean }
 export type InsightsPeriod = 'day' | 'week' | 'month' | 'quarter' | 'year'
 export type InsightsAverage = { count: number; average: number | null }
 export type InsightsCount = { label: string; count: number }
@@ -63,6 +64,11 @@ export const api = {
     body: JSON.stringify({ title }),
   }),
   deleteDocument: (id: string) => request<void>(`/documents/${id}`, { method: 'DELETE' }),
+  exportBackup: () => request<unknown>('/backup'),
+  automaticBackupStatus: (signal: AbortSignal) => request<AutomaticBackupStatus>('/backup/status', { signal }),
+  restoreBackup: (backup: unknown) => request<Record<string, { added: number; skipped: number }>>('/backup/restore', {
+    method: 'POST', body: JSON.stringify(backup),
+  }),
   saveDocument: (id: string, contentJson: JSONContent, searchText: string) => request<ApiDocument>(`/documents/${id}`, {
     method: 'PATCH',
     body: JSON.stringify({ content_json: contentJson, search_text: searchText }),

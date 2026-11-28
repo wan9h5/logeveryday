@@ -1,3 +1,5 @@
+import asyncio
+from contextlib import asynccontextmanager, suppress
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
@@ -6,13 +8,41 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .automatic_backup import AutomaticBackup
+from .backup import router as backup_router
 from .config import settings
-from .db import Base, engine, get_db
+from .db import Base, SessionLocal, engine, get_db
 from .insights import JOURNAL_ZONE, JournalStats, Period, as_utc_boundary, local_day, period_bounds
 from .models import BristolRecord, Document, Expense, Mood, Record, User
 from .schemas import BristolCreate, DocumentCreate, DocumentOut, DocumentUpdate, ExpenseCreate, MoodCreate, RecordCreate, RecordOut
 
-app = FastAPI(title=settings.app_name, version="0.1.0")
+automatic_backup = AutomaticBackup(settings.backup_directory, settings.automatic_backup_enabled)
+
+
+def initialize_database() -> None:
+    # Development convenience; production should run Alembic migrations.
+    Base.metadata.create_all(bind=engine)
+    with SessionLocal() as db:
+        if not db.get(User, "demo-user"):
+            db.add(User(id="demo-user", email="demo@example.com", password_hash="development-only"))
+            db.commit()
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    await asyncio.to_thread(initialize_database)
+    task = asyncio.create_task(automatic_backup.run()) if automatic_backup.enabled else None
+    try:
+        yield
+    finally:
+        if task is not None:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
+
+app = FastAPI(title=settings.app_name, version="1.0.0", lifespan=lifespan)
+app.include_router(backup_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in settings.cors_origins.split(",")],
@@ -22,20 +52,15 @@ app.add_middleware(
 )
 
 
-@app.on_event("startup")
-def startup() -> None:
-    # Development convenience; production should run Alembic migrations.
-    Base.metadata.create_all(bind=engine)
-    with next(get_db()) as db:
-        if not db.get(User, "demo-user"):
-            db.add(User(id="demo-user", email="demo@example.com", password_hash="development-only"))
-            db.commit()
-
-
 @app.get("/api/health")
 def health(db: Session = Depends(get_db)) -> dict[str, str]:
     db.execute(select(1))
     return {"status": "ok", "database": "connected", "service": "modular-life-journal-api"}
+
+
+@app.get("/api/backup/status")
+def backup_status():
+    return automatic_backup.status()
 
 
 @app.get("/api/documents", response_model=list[DocumentOut])

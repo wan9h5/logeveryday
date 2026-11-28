@@ -223,6 +223,10 @@ class JournalStats:
             if quality is not None and quality >= 0:
                 self.sleep_quality.add(quality)
                 trend.sleep_quality.add(quality)
+            else:
+                score = number(entry.get("legacySleepScore"))
+                if score in (1, 2, 3, 4, 5):
+                    self.legacy_sleep_quality.add(score)
         else:
             for name in MEALS:
                 self.add_meal(day, name, entry.get(name))

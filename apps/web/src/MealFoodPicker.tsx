@@ -1,12 +1,14 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react'
 import { ChevronDown } from 'lucide-react'
 
-export function MealFoodPicker({ name, label, suggestions }: { name: string; label: string; suggestions: string[] }) {
+export function MealFoodPicker({ name, label, suggestions, initialValue = '' }: {
+  name: string; label: string; suggestions: string[]; initialValue?: string
+}) {
   const listId = useId()
   const pickerRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
-  const [value, setValue] = useState('')
+  const [value, setValue] = useState(initialValue)
   const [open, setOpen] = useState(false)
   const [filter, setFilter] = useState(false)
   const [active, setActive] = useState(-1)

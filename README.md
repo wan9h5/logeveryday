@@ -4,17 +4,9 @@
 
 ## 当前版本
 
-当前仓库是 MVP 基础版本，包含：
+v1.0 面向本机个人使用。正文支持 Markdown 和富文本，生活日志记录三餐、消费、心情、Bristol 分类和睡眠质量。已保存的卡片可以编辑或删除。日历可定位到带时间的随记，统计中心按周、月、年等周期汇总已保存的记录。
 
-- React + TypeScript + Vite 前端工作台
-- Python + FastAPI 后端 API 骨架
-- SQLAlchemy 2 + Alembic 数据库基础
-- MySQL 连接配置与 Docker Compose
-- `Document / Block / Record` 数据模型
-- 三栏布局：文档区、编辑区、标题目录
-- TipTap 富文本编辑器工具栏
-- 可插拔模块注册机制：今日记录、心情、Bristol 排便、消费、图片
-- 本地演示数据，后端不可用时前端仍可预览
+前端使用 React、TypeScript、Vite 和 TipTap，后端使用 FastAPI、SQLAlchemy 和 MySQL。
 
 ## 目录
 
@@ -59,12 +51,14 @@ uvicorn app.main:app --reload
 docker compose -f infra/docker-compose.yml up -d
 ```
 
-复制 `.env.example` 为 `.env` 后即可连接本地数据库。后端会自动创建演示数据；正式环境使用 Alembic 迁移。
+复制根目录的 `.env.example` 为 `apps/api/.env`，填写本机 MySQL 的连接信息。开发环境启动时会初始化数据表和本地账户。正式环境使用 Alembic 迁移。
 
-## 下一步
+## 备份与恢复
 
-1. 接入真实登录与 JWT 会话。
-2. 将编辑器 JSON 和结构化记录保存到 API。
-3. 增加图片上传到本地存储 / MinIO。
-4. 完成全文搜索、提醒设置和消费统计接口。
-5. 增加日历、统计中心、导出与备份。
+后端会在北京时间每天生成一份自动备份。当天首次启动时如果还没有备份，就补一份当前已保存的数据。每个日期的备份会留在本机，旧备份可以按需归档。
+
+默认目录是 `apps/api/backups/`，文件名为 `logeveryday-auto-YYYY-MM-DD.json`。可在 `apps/api/.env` 中用 `BACKUP_DIRECTORY` 指定其他本机目录，或把 `AUTOMATIC_BACKUP_ENABLED` 设为 `false`。默认备份目录已加入 Git 忽略列表。
+
+在「设置 → 备份与恢复」可查看最近备份、手动导出，或导入任一备份文件。恢复会补回缺失项，同一记录保留当前版本。
+
+访问控制仍采用本机账户配置。跨设备使用前，需要先接入登录和访问保护。

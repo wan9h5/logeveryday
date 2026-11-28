@@ -1,6 +1,6 @@
 import { useId, useRef, useState, type FormEvent } from 'react'
 import { Node, type Editor, type JSONContent } from '@tiptap/react'
-import type { DOMOutputSpec, Node as ProseMirrorNode } from '@tiptap/pm/model'
+import { DOMSerializer, type DOMOutputSpec, type Node as ProseMirrorNode } from '@tiptap/pm/model'
 import { Plugin, PluginKey, Selection, TextSelection, type Transaction } from '@tiptap/pm/state'
 import { Decoration, DecorationSet } from '@tiptap/pm/view'
 import { Plus, X } from 'lucide-react'
@@ -38,6 +38,7 @@ export type DailyEntry = DailyRecord & {
   meals: { name: MealName; food: string; amount: number | null; place: string }[]
   otherExpenses: Expense[]
   sleepQuality: number | null
+  legacySleepScore?: number
 }
 
 type LegacyDailyEntry = DailyRecord & {
@@ -49,7 +50,7 @@ type LegacyDailyEntry = DailyRecord & {
   sleepScore: number | null
 }
 
-type SavedDailyEntry = DailyEntry | LegacyDailyEntry
+export type SavedDailyEntry = DailyEntry | LegacyDailyEntry
 const expenseInput = { type: 'number', min: 0, max: 9999999999.99, step: 0.01 } as const
 
 export type MealSuggestions = Record<MealName, string[]>
@@ -116,7 +117,7 @@ function entryTotal(entry: SavedDailyEntry) {
     : [entry.expenseAmount])
 }
 
-function entryRows(entry: SavedDailyEntry): { label: string; value: string; color?: string }[] {
+export function entryRows(entry: SavedDailyEntry): { label: string; value: string; color?: string }[] {
   const rows: { label: string; value: string; color?: string }[] = []
   if ('meals' in entry) {
     for (const [key, label] of meals) {
@@ -130,6 +131,9 @@ function entryRows(entry: SavedDailyEntry): { label: string; value: string; colo
       if (details.length) rows.push({ label: '其他消费', value: details.join(' · ') })
     }
     if (entry.sleepQuality !== null) rows.push({ label: '睡眠质量', value: String(entry.sleepQuality) })
+    else if (entry.legacySleepScore && scores.includes(entry.legacySleepScore)) {
+      rows.push({ label: '睡眠质量', value: `${entry.legacySleepScore} / 5` })
+    }
   } else {
     for (const [key, label] of meals) {
       if (typeof entry[key] === 'string' && entry[key]) rows.push({ label, value: entry[key] })
@@ -164,10 +168,35 @@ function dailyFormPosition(doc: ProseMirrorNode) {
   return trailingBlank ? doc.content.size - last.nodeSize : doc.content.size
 }
 
-export const DailyJournal = Node.create({
+function dailyRecordHtml(node: ProseMirrorNode, attributes: Record<string, unknown>): DOMOutputSpec {
+  const entry = node.attrs.entry as SavedDailyEntry | null
+  const rows = (entry ? entryRows(entry) : []).map<DOMOutputSpec>(({ label, value, color }) => {
+    const cell: DOMOutputSpec = color
+      ? ['td', ['span', { class: 'daily-mood-dot', style: `background: ${color}`, 'aria-hidden': 'true' }], value]
+      : ['td', value]
+    return ['tr', ['th', { scope: 'row' }, label], cell]
+  })
+  return ['section', { ...attributes, class: 'daily-record' },
+    ['header', { class: 'daily-record-heading' }, ['strong', '生活日志'],
+      ['span', { class: 'daily-record-date' }, typeof entry?.date === 'string' ? entry.date : '']],
+    ['table', ['tbody', ...rows]],
+    ...(entry ? [['footer', { class: 'daily-record-total' }, ['span', '当日总花费'], ['strong', money(entryTotal(entry))]] as DOMOutputSpec] : []),
+  ]
+}
+
+export type DailyRecordTarget = { entry: SavedDailyEntry; position: () => number | undefined }
+
+export const DailyJournal = Node.create<{
+  onEdit: (target: DailyRecordTarget) => void
+  onDelete: (target: DailyRecordTarget) => void
+}>({
   name: 'dailyJournal',
   group: 'block',
   atom: true,
+
+  addOptions() {
+    return { onEdit: () => {}, onDelete: () => {} }
+  },
 
   addAttributes() {
     return {
@@ -187,20 +216,38 @@ export const DailyJournal = Node.create({
   },
 
   renderHTML({ node, HTMLAttributes }) {
-    const entry = node.attrs.entry as SavedDailyEntry | null
-    const rows = (entry ? entryRows(entry) : []).map<DOMOutputSpec>(({ label, value, color }) => {
-      const cell: DOMOutputSpec = color
-        ? ['td', ['span', { class: 'daily-mood-dot', style: `background: ${color}`, 'aria-hidden': 'true' }], value]
-        : ['td', value]
-      return ['tr', ['th', { scope: 'row' }, label], cell]
-    })
+    return dailyRecordHtml(node, HTMLAttributes)
+  },
 
-    return ['section', { ...HTMLAttributes, class: 'daily-record' },
-      ['header', { class: 'daily-record-heading' }, ['strong', '生活日志'],
-        ['span', { class: 'daily-record-date' }, typeof entry?.date === 'string' ? entry.date : '']],
-      ['table', ['tbody', ...rows]],
-      ...(entry ? [['footer', { class: 'daily-record-total' }, ['span', '当日总花费'], ['strong', money(entryTotal(entry))]] as DOMOutputSpec] : []),
-    ]
+  addNodeView() {
+    return ({ node, getPos, HTMLAttributes }) => {
+      const { dom } = DOMSerializer.renderSpec(document, dailyRecordHtml(node, HTMLAttributes))
+      const card = dom as HTMLElement
+      const entry = node.attrs.entry as SavedDailyEntry | null
+      if (!entry) return { dom: card }
+      const date = card.querySelector('.daily-record-date')
+      const actions = document.createElement('div')
+      actions.className = 'daily-edit-actions'
+      date?.replaceWith(actions)
+      if (date) actions.append(date)
+      const target = {
+        entry, position: () => typeof getPos === 'function' ? getPos() : undefined,
+      }
+      const button = (label: string, action: () => void) => {
+        const element = document.createElement('button')
+        element.type = 'button'
+        element.className = 'toolbar-button daily-edit-button'
+        element.textContent = label
+        element.setAttribute('aria-label', `${label} ${entry.date} 的生活日志`)
+        element.addEventListener('click', action)
+        return element
+      }
+      const remove = button('删除', () => this.options.onDelete(target))
+      remove.classList.add('daily-delete-button')
+      const edit = button('编辑', () => this.options.onEdit(target))
+      actions.append(edit, remove)
+      return { dom: card, stopEvent: (event) => event.target === edit || event.target === remove, ignoreMutation: () => true }
+    }
   },
 
   renderText({ node }) {
@@ -305,18 +352,60 @@ export function saveDailyEntry(editor: Editor, host: HTMLDivElement, entry: Dail
   return true
 }
 
-export function DailyJournalForm({ onSave, onClose, mealSuggestions }: {
+function currentDailyRecord(editor: Editor, target: DailyRecordTarget) {
+  const position = target.position()
+  if (position === undefined) return null
+  const node = editor.state.doc.nodeAt(position)
+  return node?.type === editor.schema.nodes.dailyJournal && node.attrs.entry === target.entry ? { position, node } : null
+}
+
+export function updateDailyEntry(editor: Editor, target: DailyRecordTarget, entry: DailyEntry) {
+  const current = currentDailyRecord(editor, target)
+  if (!current) return false
+  editor.view.dispatch(editor.state.tr.setNodeMarkup(current.position, undefined, { ...current.node.attrs, entry }))
+  return true
+}
+
+export function deleteDailyEntry(editor: Editor, target: DailyRecordTarget) {
+  const current = currentDailyRecord(editor, target)
+  if (!current) return false
+  editor.view.dispatch(editor.state.tr.deleteRange(current.position, current.position + current.node.nodeSize))
+  return true
+}
+
+function editDefaults(entry: SavedDailyEntry | undefined) {
+  if (!entry || 'meals' in entry) return entry
+  return {
+    date: entry.date,
+    meals: meals.map(([name]) => ({ name, food: entry[name] || '', amount: null, place: '' })),
+    otherExpenses: entry.expenseNote || entry.expenseAmount != null
+      ? [{ description: entry.expenseNote || '', amount: entry.expenseAmount ?? null }] : [],
+    sleepQuality: null,
+    legacySleepScore: entry.sleepScore ?? undefined,
+    moodScore: entry.moodScore,
+    bristolType: entry.bristolType,
+  } satisfies DailyEntry
+}
+
+export function DailyJournalForm({ onSave, onClose, mealSuggestions, initialEntry }: {
   onSave: (entry: DailyEntry) => boolean
   onClose: () => void
   mealSuggestions: MealSuggestions
+  initialEntry?: SavedDailyEntry
 }) {
   const fieldPrefix = useId()
-  const [date] = useState(() => recordDateFormat.format(new Date()))
-  const [mood, setMood] = useState('')
+  const [initial] = useState(() => editDefaults(initialEntry))
+  const [date] = useState(() => initial?.date ?? recordDateFormat.format(new Date()))
+  const [mood, setMood] = useState(initial?.moodScore?.toString() ?? '')
   const [error, setError] = useState('')
-  const [mealAmounts, setMealAmounts] = useState<Partial<Record<MealName, string>>>({})
-  const [otherRows, setOtherRows] = useState([{ id: 0, amount: '' }])
-  const nextOtherId = useRef(1)
+  const [mealAmounts, setMealAmounts] = useState<Partial<Record<MealName, string>>>(() => Object.fromEntries(
+    (initial?.meals ?? []).map(({ name, amount }) => [name, amount?.toString() ?? '']),
+  ))
+  const [otherRows, setOtherRows] = useState(() => {
+    const expenses = initial?.otherExpenses.length ? initial.otherExpenses : [{ description: '', amount: null }]
+    return expenses.map(({ description, amount }, id) => ({ id, description, amount: amount?.toString() ?? '' }))
+  })
+  const nextOtherId = useRef(otherRows.length)
   const fieldId = (name: string) => `${fieldPrefix}-${name}`
   const total = totalExpense([
     ...Object.values(mealAmounts).map(numberOrNull),
@@ -325,7 +414,7 @@ export function DailyJournalForm({ onSave, onClose, mealSuggestions }: {
 
   function addOtherRow() {
     const id = nextOtherId.current++
-    setOtherRows((rows) => [...rows, { id, amount: '' }])
+    setOtherRows((rows) => [...rows, { id, description: '', amount: '' }])
   }
 
   function save(event: FormEvent<HTMLFormElement>) {
@@ -343,6 +432,7 @@ export function DailyJournalForm({ onSave, onClose, mealSuggestions }: {
       })).filter(({ description, amount }) => description || amount !== null),
       bristolType: number('bristolType'), sleepQuality: number('sleepQuality'), moodScore: number('moodScore'),
     }
+    if (entry.sleepQuality === null && initial?.legacySleepScore) entry.legacySleepScore = initial.legacySleepScore
     if (!entryRows(entry).length) {
       setError('至少填写一项记录。')
       return
@@ -363,7 +453,8 @@ export function DailyJournalForm({ onSave, onClose, mealSuggestions }: {
               <th scope="row">{label}</th>
               <td>
                 <div className="daily-meal-fields">
-                  <MealFoodPicker name={`${name}Food`} label={label} suggestions={mealSuggestions[name]} />
+                  <MealFoodPicker name={`${name}Food`} label={label} suggestions={mealSuggestions[name]}
+                    initialValue={initial?.meals.find((meal) => meal.name === name)?.food} />
                   <input
                     {...expenseInput}
                     name={`${name}Amount`}
@@ -375,7 +466,8 @@ export function DailyJournalForm({ onSave, onClose, mealSuggestions }: {
                       setMealAmounts((previous) => ({ ...previous, [name]: amount }))
                     }}
                   />
-                  <input name={`${name}Place`} aria-label={`${label}消费地点`} type="text" placeholder="在哪消费" maxLength={255} />
+                  <input name={`${name}Place`} aria-label={`${label}消费地点`} type="text" placeholder="在哪消费" maxLength={255}
+                    defaultValue={initial?.meals.find((meal) => meal.name === name)?.place} />
                 </div>
               </td>
             </tr>
@@ -388,7 +480,7 @@ export function DailyJournalForm({ onSave, onClose, mealSuggestions }: {
                   <Plus size={16} aria-hidden="true" />
                 </button>
               </div>
-              {otherRows.map(({ id, amount }, index) => (
+              {otherRows.map(({ id, description, amount }, index) => (
                 <div className="daily-other-expense" key={id}>
                   <input
                     name={`otherDescription-${id}`}
@@ -396,6 +488,7 @@ export function DailyJournalForm({ onSave, onClose, mealSuggestions }: {
                     type="text"
                     placeholder="用途"
                     maxLength={255}
+                    defaultValue={description}
                   />
                   <input
                     {...expenseInput}
@@ -422,7 +515,7 @@ export function DailyJournalForm({ onSave, onClose, mealSuggestions }: {
           <tr>
             <th scope="row"><label htmlFor={fieldId('bristolType')}>排便</label></th>
             <td>
-              <JournalSelect id={fieldId('bristolType')} name="bristolType" defaultValue="">
+              <JournalSelect id={fieldId('bristolType')} name="bristolType" defaultValue={initial?.bristolType?.toString() ?? ''}>
                 <option value="">选择 Bristol 类型</option>
                 {bristolTypes.map((type, index) => <option key={type} value={index + 1}>Type {index + 1} · {type}</option>)}
               </JournalSelect>
@@ -431,7 +524,9 @@ export function DailyJournalForm({ onSave, onClose, mealSuggestions }: {
           <tr>
             <th scope="row"><label htmlFor={fieldId('sleepQuality')}>睡眠质量</label></th>
             <td>
-              <input id={fieldId('sleepQuality')} name="sleepQuality" type="number" min={0} step="any" placeholder="输入睡眠分数" />
+              <input id={fieldId('sleepQuality')} name="sleepQuality" type="number" min={0} step="any" placeholder="输入睡眠分数"
+                defaultValue={initial?.sleepQuality ?? undefined} />
+              {initial?.legacySleepScore && <small className="daily-legacy-score">旧版评分 {initial.legacySleepScore} / 5，填写新分数后替换。</small>}
             </td>
           </tr>
           <tr>
@@ -452,10 +547,12 @@ export function DailyJournalForm({ onSave, onClose, mealSuggestions }: {
       </div>
       <footer className="daily-record-footer">
         {error && <span className="column-error" role="alert">{error}</span>}
-        <button type="button" className="small-icon" aria-label="收起日志表格" title="收起日志表格" onClick={onClose}>
-          <X size={15} aria-hidden="true" />
-        </button>
-        <button type="submit" className="composer-save">保存日志</button>
+        {initialEntry
+          ? <button type="button" className="toolbar-button" onClick={onClose}>取消</button>
+          : <button type="button" className="small-icon" aria-label="收起日志表格" title="收起日志表格" onClick={onClose}>
+              <X size={15} aria-hidden="true" />
+            </button>}
+        <button type="submit" className="composer-save">{initialEntry ? '保存修改' : '保存日志'}</button>
       </footer>
     </form>
   )

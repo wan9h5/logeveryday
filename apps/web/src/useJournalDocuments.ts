@@ -92,6 +92,23 @@ export function useJournalDocuments() {
     }))
   }
 
+  async function flushPending() {
+    await Promise.all([...drafts.current.keys()].map(async (id) => {
+      while (drafts.current.has(id)) {
+        cancelScheduledSave(id)
+        const pending = writes.current.get(id)
+        if (pending) {
+          await pending
+          continue
+        }
+        const draft = drafts.current.get(id)
+        save(id)
+        await writes.current.get(id)
+        if (drafts.current.get(id) === draft) throw new Error('A journal could not be saved')
+      }
+    }))
+  }
+
   const edit = (id: string, doc: ProseMirrorNode) => {
     drafts.current.set(id, doc)
     setSaveState(id, 'pending')
@@ -129,5 +146,5 @@ export function useJournalDocuments() {
     }
   }
 
-  return { documents, loadState, retryLoad, saveStates, edit, getDraft, save, create, rename, remove }
+  return { documents, loadState, retryLoad, saveStates, edit, getDraft, save, flushPending, create, rename, remove }
 }

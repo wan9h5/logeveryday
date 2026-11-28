@@ -10,30 +10,35 @@ import TextStyle from '@tiptap/extension-text-style'
 import Link from '@tiptap/extension-link'
 import Placeholder from '@tiptap/extension-placeholder'
 import { ArrowDownToLine, CalendarDays, Check, ChevronDown, Inbox, LayoutGrid, Plus, Settings, Sparkles, Type, Upload, X } from 'lucide-react'
-import { api, type ApiDocument } from './api'
+import type { ApiDocument } from './api'
 import { DocumentColumns } from './DocumentColumns'
 import { JournalDialog } from './JournalDialog'
+import { JournalBackup } from './JournalBackup'
 import { InsightsView, WeeklySummary } from './InsightsView'
+import { CalendarView, type CalendarAnchor } from './CalendarView'
 import { SavePositionPicker, type SavePosition } from './SavePositionPicker'
 import { FloatingTextToolbar } from './FloatingTextToolbar'
 import { ColumnTheme, JournalFontSize, columnThemeStyle } from './editorStyle'
 import { ParagraphTime, journalTimeNextLine } from './ParagraphTime'
 import { ClearMarksOnEnter } from './ClearMarksOnEnter'
-import { DailyJournal, DailyJournalForm, closeDailySlot, collectMealSuggestions, openDailyForm, saveDailyEntry, showDailyPrompt, type DailyEntry, type MealSuggestions } from './DailyJournal'
+import { DailyJournal, DailyJournalForm, closeDailySlot, collectMealSuggestions, deleteDailyEntry, openDailyForm, saveDailyEntry, showDailyPrompt, updateDailyEntry, type DailyRecordTarget, type DailyEntry, type MealSuggestions } from './DailyJournal'
 import { HeadingPrefix, editableJournal, headingText, headingTextPosition } from './HeadingPrefix'
 import { useJournalDocuments, type SaveState } from './useJournalDocuments'
 
 type PluginId = 'daily' | 'mood' | 'bristol' | 'expense' | 'image'
 type View = 'inbox' | 'calendar' | 'insights'
+type DailyField = 'breakfastFood' | 'moodScore' | 'bristolType' | 'otherDescription-0'
 
 const journalEditorProps = {
   scrollThreshold: { top: 0, right: 0, bottom: 72, left: 0 },
   scrollMargin: { top: 5, right: 5, bottom: 96, left: 5 },
 }
 
-function focusDailyForm(host: HTMLDivElement) {
+function focusDailyForm(host: HTMLDivElement, field: DailyField) {
   host.scrollIntoView({ block: 'start', inline: 'nearest' })
-  host.querySelector<HTMLInputElement>('input[name="breakfastFood"]')?.focus({ preventScroll: true })
+  const input = host.querySelector<HTMLElement>(`[name="${field}"]`)
+  input?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  input?.focus({ preventScroll: true })
 }
 
 const pluginMeta: Record<PluginId, { icon: string; label: string; description: string }> = {
@@ -44,22 +49,28 @@ const pluginMeta: Record<PluginId, { icon: string; label: string; description: s
   image: { icon: '🖼️', label: '图片', description: '上传一张图片' },
 }
 
-function CalendarView({ documents, onOpen }: { documents: ApiDocument[]; onOpen: (id: string) => void }) {
-  const days = Array.from({ length: 30 }, (_, i) => i + 1)
-  return <div className="feature-view"><div className="feature-heading"><div><div className="eyebrow">CALENDAR</div><h1>2026年 9月</h1><p>把生活放回时间里，回看每一天留下的痕迹。</p></div><button className="toolbar-button"><CalendarDays size={16} /> 今天</button></div><div className="calendar-card"><div className="calendar-week">{['一', '二', '三', '四', '五', '六', '日'].map((day) => <span key={day}>{day}</span>)}</div><div className="calendar-grid">{Array.from({ length: 1 }).map((_, i) => <span key={`empty-${i}`} />)}{days.map((day) => <button key={day} className={`${day === 19 ? 'today' : ''} ${[3, 7, 12, 16, 19, 24, 28].includes(day) ? 'has-entry' : ''}`} onClick={() => day === 19 && documents[0] && onOpen(documents[0].id)}><strong>{day}</strong>{[3, 7, 12, 16, 19, 24, 28].includes(day) && <small />}</button>)}</div></div><div className="calendar-entries"><div className="section-heading"><span>最近记录</span><span className="line" /></div>{documents.slice(0, 3).map((doc) => <button key={doc.id} className="calendar-entry" onClick={() => onOpen(doc.id)}><span className="entry-date">19<span>周六</span></span><span><strong>{doc.title}</strong><small>{new Date(doc.updated_at).toLocaleDateString('zh-CN')}</small></span><ChevronDown size={15} /></button>)}</div></div>
+function positionAtPath(node: ProseMirrorNode, path: number[]) {
+  let contentStart = 0
+  for (const index of path) {
+    if (index < 0 || index >= node.childCount) return null
+    for (let i = 0; i < index; i += 1) contentStart += node.child(i).nodeSize
+    node = node.child(index)
+    contentStart += 1
+  }
+  return path.length ? contentStart - 1 : null
 }
 
-function JournalEditor({ doc, documents, getDraft, saveState, onEdit, onSave }: {
+function JournalEditor({ doc, documents, getDraft, saveState, onEdit, onSave, entryAnchor }: {
   doc: ApiDocument
   documents: ApiDocument[]
   getDraft: () => ProseMirrorNode | undefined
   saveState: SaveState
   onEdit: (doc: ProseMirrorNode) => void
   onSave: () => void
+  entryAnchor: CalendarAnchor | null
 }) {
   const [moduleMenu, setModuleMenu] = useState(false)
   const modulePickerRef = useRef<HTMLDivElement>(null)
-  const [moduleError, setModuleError] = useState('')
   const [showComposer, setShowComposer] = useState(false)
   const [composerText, setComposerText] = useState('')
   const [composerPosition, setComposerPosition] = useState<SavePosition>('bottom')
@@ -69,8 +80,11 @@ function JournalEditor({ doc, documents, getDraft, saveState, onEdit, onSave }: 
   const [dailyMode, setDailyMode] = useState(false)
   const [dailyForms, setDailyForms] = useState<HTMLDivElement[]>([])
   const dailyFormId = useRef(0)
-  const pendingFormFocus = useRef<HTMLDivElement | null>(null)
+  const pendingFormFocus = useRef<{ host: HTMLDivElement; field: DailyField } | null>(null)
   const [dailyPrompt, setDailyPrompt] = useState<{ position: number; host: HTMLDivElement } | null>(null)
+  const [dailyEdit, setDailyEdit] = useState<DailyRecordTarget | null>(null)
+  const [dailyDelete, setDailyDelete] = useState<DailyRecordTarget | null>(null)
+  const [dailyDeleteError, setDailyDeleteError] = useState(false)
   const [mealSuggestions, setMealSuggestions] = useState<MealSuggestions>({ breakfast: [], lunch: [], dinner: [] })
 
   useLayoutEffect(() => {
@@ -107,7 +121,8 @@ function JournalEditor({ doc, documents, getDraft, saveState, onEdit, onSave }: 
   const editor = useEditor({
     editorProps: journalEditorProps,
     extensions: [
-      StarterKit, Underline, TextStyle, Color, JournalFontSize, ColumnTheme, ParagraphTime, HeadingPrefix, ClearMarksOnEnter, DailyJournal,
+      StarterKit, Underline, TextStyle, Color, JournalFontSize, ColumnTheme, ParagraphTime, HeadingPrefix, ClearMarksOnEnter,
+      DailyJournal.configure({ onEdit: setDailyEdit, onDelete: setDailyDelete }),
       Highlight.configure({ multicolor: true }),
       Link.configure({ openOnClick: false }),
       Placeholder.configure({ placeholder: '从今天发生的第一件事开始记录…' }),
@@ -126,18 +141,48 @@ function JournalEditor({ doc, documents, getDraft, saveState, onEdit, onSave }: 
     },
   })
 
+  useEffect(() => {
+    if (!editor || !entryAnchor) return
+    const frame = requestAnimationFrame(() => {
+      const { doc: content } = editor.state
+      const { path, stamp } = entryAnchor
+      let position = positionAtPath(content, path)
+      if (stamp && (position === null || content.nodeAt(position)?.attrs.journalTime !== stamp)) {
+        position = null
+        content.descendants((node, candidate) => {
+          if (position === null && node.attrs.journalTime === stamp) position = candidate
+          return position === null
+        })
+      }
+      const target = position === null ? null : editor.view.nodeDOM(position)
+      if (!(target instanceof HTMLElement)) return
+      const time = stamp ? target.querySelector<HTMLElement>('.journal-time-point time') : null
+      const anchor = time ?? target
+      const pane = paneRef.current
+      if (pane) {
+        const { top, height } = anchor.getBoundingClientRect()
+        const bounds = pane.getBoundingClientRect()
+        pane.scrollTop += top + height / 2 - bounds.top - bounds.height / 2
+      }
+      if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        anchor.animate([{ backgroundColor: 'var(--accent-soft)' }, { backgroundColor: 'transparent' }], 900)
+      }
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [editor, entryAnchor])
+
   useLayoutEffect(() => {
-    const host = pendingFormFocus.current
-    if (!host) return
+    const focus = pendingFormFocus.current
+    if (!focus) return
     pendingFormFocus.current = null
-    focusDailyForm(host)
+    focusDailyForm(focus.host, focus.field)
   }, [dailyForms])
 
   useLayoutEffect(() => {
     if (editor && dailyPrompt) showDailyPrompt(editor, dailyPrompt)
   }, [editor, dailyPrompt])
 
-  const showDailyForm = () => {
+  const showDailyForm = (field: DailyField = 'breakfastFood') => {
     if (!editor) return
     const newHost = document.createElement('div')
     newHost.className = 'daily-record-slot'
@@ -147,10 +192,10 @@ function JournalEditor({ doc, documents, getDraft, saveState, onEdit, onSave }: 
     const otherDocuments = documents.filter((item) => item.id !== doc.id).map((item) => item.content_json)
     setMealSuggestions(collectMealSuggestions([editor.getJSON(), ...otherDocuments]))
     if (host === newHost) {
-      pendingFormFocus.current = host
+      pendingFormFocus.current = { host, field }
       setDailyForms((forms) => [...forms, host])
     } else {
-      focusDailyForm(host)
+      focusDailyForm(host, field)
     }
   }
 
@@ -230,21 +275,9 @@ function JournalEditor({ doc, documents, getDraft, saveState, onEdit, onSave }: 
       return
     }
 
-    const { icon, label } = pluginMeta[id]
-    insertModuleContent({
-      type: 'paragraph',
-      content: [{ type: 'text', text: `${icon} ${label}：待填写` }],
-    })
-
-    setModuleError('')
-    if (id === 'mood') {
-      void api.createMood({ score: 4, color: '#F3A86F', note: '不错' })
-        .catch(() => setModuleError('心情记录保存失败'))
-    }
-    if (id === 'bristol') {
-      void api.createBristol({ bristol_type: 4, note: '正常香肠状' })
-        .catch(() => setModuleError('排便记录保存失败'))
-    }
+    const fields = { mood: 'moodScore', bristol: 'bristolType', expense: 'otherDescription-0' } as const
+    setDailyMode(true)
+    showDailyForm(fields[id])
   }
 
   const saveComposer = () => {
@@ -378,7 +411,6 @@ function JournalEditor({ doc, documents, getDraft, saveState, onEdit, onSave }: 
               <article className="document">
                 <EditorContent editor={editor} />
                 {editor && <FloatingTextToolbar editor={editor} />}
-                {moduleError && <p className="column-error" role="alert">{moduleError}</p>}
               </article>
             </div>
           </div>
@@ -402,7 +434,7 @@ function JournalEditor({ doc, documents, getDraft, saveState, onEdit, onSave }: 
       </div>
       {dailyPrompt && createPortal(
         <>
-          <button type="button" className="toolbar-button" onClick={showDailyForm}>
+          <button type="button" className="toolbar-button" onClick={() => showDailyForm()}>
             <Plus size={15} aria-hidden="true" />填写日志
           </button>
           <button type="button" className="small-icon" aria-label="关闭填写日志提示" title="关闭填写日志提示" onClick={() => hideDailySlot(dailyPrompt.host)}>
@@ -414,6 +446,56 @@ function JournalEditor({ doc, documents, getDraft, saveState, onEdit, onSave }: 
         <DailyJournalForm onSave={(entry) => saveDaily(host, entry)} onClose={() => hideDailySlot(host)} mealSuggestions={mealSuggestions} />,
         host, host.id,
       ))}
+      {dailyDelete && editor && (
+        <JournalDialog className="column-dialog" labelledBy="daily-delete-title" describedBy="daily-delete-copy"
+          closeOnBackdrop onClose={() => { setDailyDelete(null); setDailyDeleteError(false) }}>
+          {(close) => (
+            <form onSubmit={(event) => {
+              event.preventDefault()
+              if (!deleteDailyEntry(editor, dailyDelete)) {
+                setDailyDeleteError(true)
+                return
+              }
+              onSave()
+              close()
+            }}>
+              <div className="modal-head">
+                <h3 id="daily-delete-title">删除生活日志</h3>
+                <button type="button" className="icon-button" aria-label="关闭" onClick={close}><X size={17} /></button>
+              </div>
+              <p id="daily-delete-copy" className="daily-delete-copy">将删除 {dailyDelete.entry.date} 的这张卡片，并更新统计和日历。</p>
+              {dailyDeleteError && <p className="column-error" role="alert">这张卡片已变化，请关闭后重试。</p>}
+              <div className="column-dialog-actions">
+                <button type="button" className="toolbar-button" autoFocus onClick={close}>取消</button>
+                <button type="submit" className="column-confirm danger">确认删除</button>
+              </div>
+            </form>
+          )}
+        </JournalDialog>
+      )}
+      {dailyEdit && editor && (
+        <JournalDialog className="daily-edit-modal" labelledBy="daily-edit-title" closeOnBackdrop onClose={() => setDailyEdit(null)}>
+          {(close) => (
+            <>
+              <div className="modal-head">
+                <h3 id="daily-edit-title">编辑生活日志</h3>
+                <button type="button" className="icon-button" aria-label="关闭编辑" onClick={close}><X size={17} /></button>
+              </div>
+              <DailyJournalForm
+                initialEntry={dailyEdit.entry}
+                mealSuggestions={collectMealSuggestions([editor.getJSON(), ...documents.filter((item) => item.id !== doc.id).map((item) => item.content_json)])}
+                onClose={close}
+                onSave={(entry) => {
+                  if (!updateDailyEntry(editor, dailyEdit, entry)) return false
+                  onSave()
+                  close()
+                  return true
+                }}
+              />
+            </>
+          )}
+        </JournalDialog>
+      )}
       <aside className="summary-pane">
         <WeeklySummary documents={documents} />
       </aside>
@@ -462,19 +544,24 @@ function JournalEditor({ doc, documents, getDraft, saveState, onEdit, onSave }: 
 function App() {
   const journal = useJournalDocuments()
   const [activeId, setActiveId] = useState<string | null>(null)
+  const [entryAnchor, setEntryAnchor] = useState<CalendarAnchor | null>(null)
+  const [calendarSelection, setCalendarSelection] = useState<string | null>(null)
   const [showSettings, setShowSettings] = useState(false)
+  const [backupBusy, setBackupBusy] = useState(false)
   const [view, setView] = useState<View>('inbox')
   const active = journal.documents.find((doc) => doc.id === activeId) ?? journal.documents[0]
 
-  const openDocument = (id: string) => {
+  const openDocument = (id: string, anchor?: CalendarAnchor) => {
     if (view === 'inbox' && active && active.id !== id) journal.save(active.id)
     setActiveId(id)
+    setEntryAnchor(anchor ?? null)
     setView('inbox')
   }
 
   const openView = (next: View) => {
     if (view === 'inbox' && next !== 'inbox' && active) journal.save(active.id)
     setView(next)
+    setEntryAnchor(null)
   }
 
   const createColumn = async (title: string, themeColor: string) => {
@@ -533,11 +620,15 @@ function App() {
             saveState={journal.saveStates[active.id] ?? 'saved'}
             onEdit={(content) => journal.edit(active.id, content)}
             onSave={() => journal.save(active.id)}
+            entryAnchor={entryAnchor}
           />
         ) : (
           <>
             <main className="editor-pane">
-              {view === 'calendar' && <CalendarView documents={journal.documents} onOpen={openDocument} />}
+              {view === 'calendar' && (
+                <CalendarView documents={journal.documents} onOpen={openDocument} status={journal.loadState}
+                  selection={calendarSelection} onSelect={setCalendarSelection} />
+              )}
               {view === 'insights' && <InsightsView documents={journal.documents} />}
               {view === 'inbox' && (
                 <div className="document column-placeholder">
@@ -556,13 +647,14 @@ function App() {
           className="settings-modal"
           labelledBy="settings-dialog-title"
           closeOnBackdrop
+          dismissDisabled={backupBusy}
           onClose={() => setShowSettings(false)}
         >
           {(close) => (
             <>
               <div className="modal-head">
                 <div><div className="eyebrow">PREFERENCES</div><h3 id="settings-dialog-title">设置</h3></div>
-                <button className="icon-button" aria-label="关闭" onClick={close}><X size={18} /></button>
+                <button className="icon-button" aria-label="关闭" onClick={close} disabled={backupBusy}><X size={18} /></button>
               </div>
               <div className="setting-row">
                 <div><strong>每日提醒</strong><small>提醒自己记录今天发生的事</small></div>
@@ -576,6 +668,7 @@ function App() {
                 <div><strong>自动保存</strong><small>停止编辑 5 秒后保存</small></div>
                 <div className="toggle on"><span /></div>
               </div>
+              <JournalBackup flush={journal.flushPending} onRestore={journal.retryLoad} onBusyChange={setBackupBusy} />
             </>
           )}
         </JournalDialog>
